@@ -67,7 +67,7 @@ int findn(int num)
 
 void cellophane_io(WsHandler * ws_handler, char * tcp_protocol, char * address, int port ){
 
-    cellophane_new(ws_handler, tcp_protocol, address, port, "socket.io", "transport=polling", 0, 1, 0);
+    cellophane_new(ws_handler, tcp_protocol, address, port, "socket.io", 1, 0, 1, 0);
 
 }
 
@@ -94,17 +94,18 @@ void cellophane_io_connect(WsHandler * ws_handler){
 
 /* trans_protocol_query should look like "tranpost=polling" */
 
-void cellophane_new(WsHandler * ws_handler, char * tcp_protocol , char * address, int port, char * path, char *trans_protocol_query, int read, int  checkSslPeer, enum cellophane_debug_level debug){
+void cellophane_new(WsHandler * ws_handler, char * tcp_protocol , char * address, int port, char * path, int protocol, int read, int  checkSslPeer, enum cellophane_debug_level debug){
 
+	char *trans_protocol_query = "transport=polling";
     int url_size = (int)(strlen(tcp_protocol) + strlen(address) + strlen(path) + findn(port) + strlen(trans_protocol_query) ) + 4;
     ws_handler->socketIOUrl = malloc(url_size);
     sprintf(ws_handler->socketIOUrl,"%s%s:%d/%s/?%s", tcp_protocol, address, port, path, trans_protocol_query);
 	fprintf(stderr, "URL : %s \n", ws_handler->socketIOUrl);
     ws_handler->serverHost = address;
     ws_handler->serverPort = port;
-    int path_size = (int)(strlen(path) + strlen(trans_protocol_query) ) + 2;
+    int path_size = (int)(strlen(path) ) + 1;
     ws_handler->serverPath = malloc(path_size);
-    sprintf(ws_handler->serverPath,"/%s/%s",path, trans_protocol_query);
+    sprintf(ws_handler->serverPath, "/%s", path);
     ws_handler->read = read;
     ws_handler->checkSslPeer = checkSslPeer;
     ws_handler->lastId = 0;
@@ -129,7 +130,6 @@ void cellophane_reset_default_events(WsHandler * ws_handler){
         ws_handler->default_events[i].event_name = event_names[i];
         ws_handler->default_events[i].callback_func = NULL;
     }
-
 }
 
 
@@ -248,7 +248,6 @@ int cellophane_handshake(WsHandler * ws_handler) {
 			cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DETAILED,"Session id : %s", ws_handler->session.sid);
 		}else if(strcmp(key, "upgrades") == 0){
 			index = json_array_size(value);
-			cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DIAGNOSTIC,"# upgrades : %d",index);
 			if(index > 0){
 				ws_handler->session.supported_transports = (char **) malloc(index * sizeof(char*));
 				json_array_foreach(value, index, transport){
@@ -265,12 +264,12 @@ int cellophane_handshake(WsHandler * ws_handler) {
 
 		iter = json_object_iter_next(json_ret, iter);
 	}
-	cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DIAGNOSTIC,"Extracted session values");
 
     if(!cellophane_find_on_char_array(ws_handler->session.supported_transports, "websocket")){
         return 0;
 	}
 
+	cellophane_print_log(ws_handler, LOG_INFO, DEBUG_DIAGNOSTIC,"websocket transport is supported  ");
     return 1;
 }
 
@@ -320,21 +319,20 @@ int cellophane_connect(WsHandler * ws_handler) {
 		}
 
     ws_handler->fd_alive = 1;
-
+	
     char * key = cellophane_generateKey(16);
-
-    int out_len = (int)(strlen(ws_handler->serverPath) + strlen(ws_handler->session.sid) + strlen(ws_handler->serverHost) + strlen(key) ) + 136;
+    int out_len = (int)(strlen(ws_handler->serverPath) + strlen(ws_handler->session.sid) + strlen(ws_handler->serverHost) + findn(ws_handler->serverPort) + strlen(key) ) + 152;
     char * out = malloc(out_len);
-    bzero(out,out_len);
-    sprintf(out, "GET %s/websocket/%s HTTP/1.1\r\nHost: %s\r\nUpgrade: WebSocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nOrigin: *\r\n\r\n",
+    bzero(out, out_len);
+	
+    sprintf(out, "GET %s/?transport=websocket&sid=%s HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nOrigin: *\r\n\r\n",
 			ws_handler->serverPath,
 			ws_handler->session.sid,
 			ws_handler->serverHost,
+			ws_handler->serverPort,
 			key);
-
-	cellophane_print_log(ws_handler,LOG_INFO,DEBUG_NONE,"Sending HTTP req");
     n = send(ws_handler->fd,out,out_len, 0);
-    //printf("sending data line 196\n");
+	cellophane_print_log(ws_handler,LOG_INFO,DEBUG_NONE,"Sending HTTP req(%d/%d) : \n%s", n, strlen(out), out);
     if (n < 0)
 		{
 			cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"ERROR writing to socket");
@@ -353,7 +351,7 @@ int cellophane_connect(WsHandler * ws_handler) {
 
     ws_handler->buffer = realloc(NULL, strlen(buff));
     strcpy(ws_handler->buffer, buff);
-
+	cellophane_print_log(ws_handler,LOG_INFO, DEBUG_DETAILED, "Websocket response : %s", ws_handler->buffer);
     if(strncmp (ws_handler->buffer,"HTTP/1.1 101",12) != 0){
         cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"Unexpected Response. Expected HTTP/1.1 101..");
         cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"Aborting...");
@@ -398,8 +396,6 @@ int cellophane_connect(WsHandler * ws_handler) {
         cellophane_print_log(ws_handler,LOG_INFO,DEBUG_MINIMAL,"Conection stablished...");
         ws_handler->fd_alive = 1;
     }
-
-
 
     ws_handler->heartbeatStamp = time(NULL);
 
