@@ -21,7 +21,6 @@
 
 #include <sys/select.h>
 #include <stdio.h>
-#include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,8 +30,7 @@
 #include <curl/easy.h>
 #include <string.h>
 #include <unistd.h>
-#include <json/json.h>
-
+#include <json-c/json.h>
 #include "cellophane_io.h"
 #include "md5.h"
 
@@ -52,6 +50,10 @@ char** cellophane_str_split(char* a_str, const char a_delim);
 char * cellophane_do_web_request(WsHandler * ws_handler);
 size_t static cellophane_write_callback_func(void *buffer, size_t size, size_t nmemb, void *userp);
 
+struct block{
+	char *mem;
+	size_t size;
+};
 
 int findn(int num)
 {
@@ -65,31 +67,46 @@ int findn(int num)
 
 void cellophane_io(WsHandler * ws_handler, char * tcp_protocol, char * address, int port ){
 
-    cellophane_new(ws_handler, tcp_protocol, address, port, "socket.io", 1, 0, 1, 0);
+    cellophane_new(ws_handler, tcp_protocol, address, port, "socket.io", "transport=polling", 0, 1, 0);
 
 }
 
 
 void cellophane_io_connect(WsHandler * ws_handler){
-
-    cellophane_init(ws_handler, ws_handler->keep_alive_flag);
-
+	cellophane_init(ws_handler, ws_handler->keep_alive_flag);
 }
 
 
-void cellophane_new(WsHandler * ws_handler, char * tcp_protocol , char * address, int port, char * path, int protocol, int read, int  checkSslPeer, enum cellophane_debug_level debug){
+/** 
+ * NOTE : As mentioned here https://stackoverflow.com/questions/23987640/socket-io-handshake-return-error-transport-unknown/25289378#25289378
+ *  How to communicate with socket.io v1.0 server:
+ *   1) GET http[s]://host:port/socket.io/?transport=polling
+ *   2) Server responds a JSON config string in response body with some unknown characters as header.
+ *      Warning for c-style char* useres: this string begins with '\0'.
+ *   3) The string looks like: \0xxxx {"sid":"xxx", "upgrades":["websocket","polling",..], pingInterval:xxxx, pingTimeout:xxxx}.
+ *        sid: seesion id for websocket connection.
+ *        upgrades: available transport method. Please make sure "websocket" is one of them.
+ *        pingInterval & pingTimeout: ping server every pingInterval and check for pong within pingTimeout.
+ *   4) Establish websocket connection at ws[s]://host:port/socket.io/?transport=websocket&sid=sid
+ *   5) Send string "52" to socket.io server upon successful connection.
+ *   6) Listen on server message, waiting for string "40" to confirm websocket link between client and server.
+*/
 
-    int url_size = (int)(strlen(tcp_protocol) + strlen(address) + strlen(path) + findn(port) + findn(protocol) ) + 3;
+/* trans_protocol_query should look like "tranpost=polling" */
+
+void cellophane_new(WsHandler * ws_handler, char * tcp_protocol , char * address, int port, char * path, char *trans_protocol_query, int read, int  checkSslPeer, enum cellophane_debug_level debug){
+
+    int url_size = (int)(strlen(tcp_protocol) + strlen(address) + strlen(path) + findn(port) + strlen(trans_protocol_query) ) + 4;
     ws_handler->socketIOUrl = malloc(url_size);
-    sprintf(ws_handler->socketIOUrl,"%s%s:%d/%s/%d", tcp_protocol, address, port, path, protocol);
+    sprintf(ws_handler->socketIOUrl,"%s%s:%d/%s/?%s", tcp_protocol, address, port, path, trans_protocol_query);
+	fprintf(stderr, "URL : %s \n", ws_handler->socketIOUrl);
     ws_handler->serverHost = address;
     ws_handler->serverPort = port;
-    int path_size = (int)(strlen(path) + findn(protocol) ) + 2;
+    int path_size = (int)(strlen(path) + strlen(trans_protocol_query) ) + 2;
     ws_handler->serverPath = malloc(path_size);
-    sprintf(ws_handler->serverPath,"/%s/%d",path, protocol);
+    sprintf(ws_handler->serverPath,"/%s/%s",path, trans_protocol_query);
     ws_handler->read = read;
     ws_handler->checkSslPeer = checkSslPeer;
-
     ws_handler->lastId = 0;
     ws_handler->keep_alive_flag = 0;
     ws_handler->checkSslPeer = 1;
@@ -99,7 +116,6 @@ void cellophane_new(WsHandler * ws_handler, char * tcp_protocol , char * address
     }
 
     ws_handler->user_events_len = 0;
-
     cellophane_reset_default_events(ws_handler);
 
 }
@@ -204,7 +220,7 @@ int cellophane_handshake(WsHandler * ws_handler) {
     if (res == NULL || strcmp(res,"") == 0){
         return 0;
     }
-
+	fprintf(stderr, "Curl Response : %s ", res);
     char** tokens;
     tokens = cellophane_str_split(res, ':');
 
@@ -238,7 +254,7 @@ int cellophane_handshake(WsHandler * ws_handler) {
 
     if(!cellophane_find_on_char_array(ws_handler->session.supported_transports, "websocket")){
         return 0;
-    }
+	}
 
     return 1;
 }
@@ -257,7 +273,7 @@ int cellophane_connect(WsHandler * ws_handler) {
     cellophane_trigger_default_events(ws_handler, info);
 
     portno = ws_handler->serverPort;
-
+	cellophane_print_log(ws_handler,LOG_INFO,DEBUG_NONE,"Creating socket");
     ws_handler->fd = socket(AF_INET, SOCK_STREAM, 0);
     if (ws_handler->fd < 0)
     {
@@ -301,6 +317,7 @@ int cellophane_connect(WsHandler * ws_handler) {
         ws_handler->serverHost,
         key);
 
+	cellophane_print_log(ws_handler,LOG_INFO,DEBUG_NONE,"Sending HTTP req");
     n = send(ws_handler->fd,out,out_len, 0);
     //printf("sending data line 196\n");
     if (n < 0)
@@ -849,7 +866,7 @@ char * cellophane_do_web_request(WsHandler * ws_handler)
     /* keeps the handle to the curl object */
     CURL *curl_handle = NULL;
     /* to keep the response */
-    char *response = NULL;
+    struct block response;
 
     /* initializing curl and setting the url */
     curl_handle = curl_easy_init();
@@ -878,12 +895,12 @@ char * cellophane_do_web_request(WsHandler * ws_handler)
 
     /* cleaning all curl stuff */
     curl_easy_cleanup(curl_handle);
-
+	
     if (res != 0 && res != 23){
         return NULL;
     }
-
-    return response;
+		
+    return response.mem;
 }
 
 /* the function to invoke as the data recieved */
@@ -892,11 +909,14 @@ size_t static cellophane_write_callback_func(void *buffer,
                         size_t nmemb,
                         void *userp)
 {
-    char **response_ptr =  (char**)userp;
+    struct block *response  =  (struct block *)userp;
+	char *temp;
+	char *buf = (char *)buffer;
+	size_t buf_size = size * nmemb, cnt = 0;
 
-    /* assuming the response is a string */
-    *response_ptr = strndup(buffer, (size_t)(size *nmemb));
-
+    response->mem = (char *) malloc( buf_size );
+	memcpy(response->mem, (buf+1), buf_size-1);
+	*(response->mem + buf_size) = '\0';
 }
 
 char** cellophane_str_split(char* a_str, const char a_delim)
@@ -1044,3 +1064,4 @@ int Base64encode(char *encoded, const char *string, int len)
     *p++ = '\0';
     return p - encoded;
 }
+

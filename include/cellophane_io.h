@@ -6,8 +6,7 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #include <time.h>
-
-#include "payload.h";
+#include "payload.h"
 
 #define ERRCOL "\x1B[31m"
 #define WARCOL "\x1B[33m"
@@ -110,7 +109,7 @@ typedef struct _wshandler{
 
 typedef wshandler_type WsHandler;
 
-extern void cellophane_new(WsHandler * ws_handler, char * tcp_protocol , char * address, int port, char * path, int protocol, int read, int  checkSslPeer, enum cellophane_debug_level  debug);
+extern void cellophane_new(WsHandler * ws_handler, char * tcp_protocol , char * address, int port, char * path, char *trans_protocol_query, int read, int  checkSslPeer, enum cellophane_debug_level  debug);
 extern void cellophane_set_debug(WsHandler * ws_handler, enum cellophane_debug_level debug);
 extern void cellophane_io(WsHandler * ws_handler, char * tcp_protocol, char * address, int port );
 extern void cellophane_io_connect(WsHandler * ws_handler);

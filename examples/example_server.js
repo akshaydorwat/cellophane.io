@@ -21,8 +21,8 @@ function handler(req, res) {
 
 // creating a new websocket to keep the content updated without any AJAX request
 io.sockets.on('connection', function(socket) {
-
-
+ console.log('socket connected');
+	
   socket.on('login', function (data) {
         console.log(data);
         socket.volatile.emit('notification', "test");

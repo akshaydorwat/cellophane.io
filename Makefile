@@ -1,9 +1,9 @@
 SHELL = /bin/sh
 CC    = gcc
-CFLAGS  = -fpermissive -fPIC -shared -Wall -Iinclude -Isrc -lcurl -ljson
+CFLAGS  =  -Wall -Iinclude -Isrc -lcurl -ljson-c -g
 
-TARGET  = cellophane.io.so
-SOURCES = $(shell echo src/*.c)
+TARGET  = cellophane
+SOURCES = $(shell echo src/*.c) 
 OBJECTS = $(SOURCES:.c=.o)
 
 
@@ -20,3 +20,6 @@ install:
 clean:
 	rm -rf *.so
 	rm -rf src/*.o
+
+run:
+	./cellophane
