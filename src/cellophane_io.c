@@ -30,7 +30,7 @@
 #include <curl/easy.h>
 #include <string.h>
 #include <unistd.h>
-#include <json-c/json.h>
+#include <jansson.h>
 #include "cellophane_io.h"
 #include "md5.h"
 
@@ -90,7 +90,7 @@ void cellophane_io_connect(WsHandler * ws_handler){
  *   4) Establish websocket connection at ws[s]://host:port/socket.io/?transport=websocket&sid=sid
  *   5) Send string "52" to socket.io server upon successful connection.
  *   6) Listen on server message, waiting for string "40" to confirm websocket link between client and server.
-*/
+ */
 
 /* trans_protocol_query should look like "tranpost=polling" */
 
@@ -138,11 +138,11 @@ void cellophane_trigger_default_events(WsHandler * ws_handler,  WsEventInfo info
     int i;
     info.ws_handler= (void *) ws_handler;
     for(i=1; i < 10; i++){
-       if( (strncmp(ws_handler->default_events[i].event_name,info.event_name,strlen(info.event_name)) == 0)
-           && (strlen(info.event_name) == strlen(ws_handler->default_events[i].event_name))
-           && ws_handler->default_events[i].callback_func != NULL){
-                cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DIAGNOSTIC,"Triggered \"%s\" default event", info.event_name);
-                ws_handler->default_events[i].callback_func(info);
+		if( (strncmp(ws_handler->default_events[i].event_name,info.event_name,strlen(info.event_name)) == 0)
+			&& (strlen(info.event_name) == strlen(ws_handler->default_events[i].event_name))
+			&& ws_handler->default_events[i].callback_func != NULL){
+			cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DIAGNOSTIC,"Triggered \"%s\" default event", info.event_name);
+			ws_handler->default_events[i].callback_func(info);
         }
     }
 
@@ -174,27 +174,27 @@ void cellophane_print_log(WsHandler * ws_handler, enum cellophane_log_type logty
     if(ws_handler->debug_level >= level){
 
         switch(logtype){
-            case LOG_ERROR:{
-                    sprintf(colored_format,"%s%s  [ERR]  %s%s\n",ERRCOL,buffer,format,CLRCOL);
-                    vfprintf(stderr,colored_format, args);
-                    break;
-                }
-            case LOG_WARNING:{
-                    sprintf(colored_format,"%s%s  [WAR]  %s%s\n",WARCOL,buffer,format,CLRCOL);
-                    vfprintf(stderr,colored_format, args);
-                    break;
-                }
-            case LOG_FREE:{
-                    sprintf(colored_format,"%s%s%s",FRECOL,format,CLRCOL);
-                    vfprintf(stderr,colored_format, args);
-                    //printf(WARCOL format, ctime(&now) ,__VA_ARGS__);
-                    break;
-                }
-            default:{
-                    sprintf(colored_format,"%s%s  [INF]  %s%s\n",INFCOL,buffer,format,CLRCOL);
-                    vfprintf(stderr,colored_format, args);
-                    break;
-                }
+		case LOG_ERROR:{
+			sprintf(colored_format,"%s%s  [ERR]  %s%s\n",ERRCOL,buffer,format,CLRCOL);
+			vfprintf(stderr,colored_format, args);
+			break;
+		}
+		case LOG_WARNING:{
+			sprintf(colored_format,"%s%s  [WAR]  %s%s\n",WARCOL,buffer,format,CLRCOL);
+			vfprintf(stderr,colored_format, args);
+			break;
+		}
+		case LOG_FREE:{
+			sprintf(colored_format,"%s%s%s",FRECOL,format,CLRCOL);
+			vfprintf(stderr,colored_format, args);
+			//printf(WARCOL format, ctime(&now) ,__VA_ARGS__);
+			break;
+		}
+		default:{
+			sprintf(colored_format,"%s%s  [INF]  %s%s\n",INFCOL,buffer,format,CLRCOL);
+			vfprintf(stderr,colored_format, args);
+			break;
+		}
         }
 
     }
@@ -216,41 +216,56 @@ void cellophane_init(WsHandler * ws_handler, int keepalive){
 
 int cellophane_handshake(WsHandler * ws_handler) {
 
-    char * res = cellophane_do_web_request(ws_handler);
-    if (res == NULL || strcmp(res,"") == 0){
+	json_error_t  json_err;
+	json_t *json_ret;
+	json_t *value;
+	json_t *transport;
+	void *iter;
+	char * res;
+	char *key;
+	size_t index;
+
+	res = cellophane_do_web_request(ws_handler);
+	if (res == NULL || strcmp(res,"") == 0){
         return 0;
     }
-	fprintf(stderr, "Curl Response : %s ", res);
-    char** tokens;
-    tokens = cellophane_str_split(res, ':');
 
-    if (tokens)
-    {
-        int i;
-        for (i = 0; *(tokens + i); i++)
-        {
-            if(i== 0){
-                ws_handler->session.sid = malloc(strlen(*(tokens + i)));
-                memcpy(ws_handler->session.sid, *(tokens + i), strlen(*(tokens + i)) );
-            }
+	cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DIAGNOSTIC, "Curl Response : %s", res);
+	json_ret = json_loads(res, 0, &json_err);
+	if(json_ret == NULL){
+		cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE, "Could not decode trasnport JSON: %d: %s\n", json_err.line, json_err.text);
+		return 0;
+	}
+	
+	cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DIAGNOSTIC,"Json parsed succesfully");
+	iter = json_object_iter(json_ret);
+	while(iter){
+		key = json_object_iter_key(iter);
+		value = json_object_iter_value(iter);
+		
+		if(strcmp(key, "sid") == 0){
+			ws_handler->session.sid = strdup(json_string_value(value));
+			cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DETAILED,"Session id : %s", ws_handler->session.sid);
+		}else if(strcmp(key, "upgrades") == 0){
+			index = json_array_size(value);
+			cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DIAGNOSTIC,"# upgrades : %d",index);
+			if(index > 0){
+				ws_handler->session.supported_transports = (char **) malloc(index * sizeof(char*));
+				json_array_foreach(value, index, transport){
+					ws_handler->session.supported_transports[index] = strdup(json_string_value(transport));
+				}
+			}
+		}else if(strcmp(key,"pingInterval") == 0){
+			ws_handler->session.heartbeat_timeout = json_integer_value(value);
+		   	cellophane_print_log(ws_handler, LOG_INFO, DEBUG_DETAILED, "Heartbit timeout : %d", ws_handler->session.heartbeat_timeout);
+		}else if(strcmp(key, "pingTimeout") == 0){
+			ws_handler->session.connection_timeout = json_integer_value(value);
+			cellophane_print_log(ws_handler, LOG_INFO, DEBUG_DIAGNOSTIC,"Connection timeout : %d ", ws_handler->session.connection_timeout);
+		}
 
-            if(i== 1){
-                ws_handler->session.heartbeat_timeout = atoi(*(tokens + i));
-            }
-
-            if(i== 2){
-                ws_handler->session.connection_timeout = atoi(*(tokens + i));
-
-            }
-
-            if(i== 3){
-                ws_handler->session.supported_transports = cellophane_str_split(*(tokens + i),',');
-            }
-
-            //free(*(tokens + i));
-        }
-        //free(tokens);
-    }
+		iter = json_object_iter_next(json_ret, iter);
+	}
+	cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DIAGNOSTIC,"Extracted session values");
 
     if(!cellophane_find_on_char_array(ws_handler->session.supported_transports, "websocket")){
         return 0;
@@ -276,11 +291,11 @@ int cellophane_connect(WsHandler * ws_handler) {
 	cellophane_print_log(ws_handler,LOG_INFO,DEBUG_NONE,"Creating socket");
     ws_handler->fd = socket(AF_INET, SOCK_STREAM, 0);
     if (ws_handler->fd < 0)
-    {
-        cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"ERROR opening socket");
-        ws_handler->fd_alive = 0;
-        exit(1);
-    }
+		{
+			cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"ERROR opening socket");
+			ws_handler->fd_alive = 0;
+			exit(1);
+		}
 
     server = gethostbyname(ws_handler->serverHost);
 
@@ -298,11 +313,11 @@ int cellophane_connect(WsHandler * ws_handler) {
 
 
     if (connect(ws_handler->fd,(const struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0)
-    {
-         cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"ERROR connecting");
-         ws_handler->fd_alive = 0;
-         exit(1);
-    }
+		{
+			cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"ERROR connecting");
+			ws_handler->fd_alive = 0;
+			exit(1);
+		}
 
     ws_handler->fd_alive = 1;
 
@@ -312,34 +327,32 @@ int cellophane_connect(WsHandler * ws_handler) {
     char * out = malloc(out_len);
     bzero(out,out_len);
     sprintf(out, "GET %s/websocket/%s HTTP/1.1\r\nHost: %s\r\nUpgrade: WebSocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nOrigin: *\r\n\r\n",
-        ws_handler->serverPath,
-        ws_handler->session.sid,
-        ws_handler->serverHost,
-        key);
+			ws_handler->serverPath,
+			ws_handler->session.sid,
+			ws_handler->serverHost,
+			key);
 
 	cellophane_print_log(ws_handler,LOG_INFO,DEBUG_NONE,"Sending HTTP req");
     n = send(ws_handler->fd,out,out_len, 0);
     //printf("sending data line 196\n");
     if (n < 0)
-    {
-         cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"ERROR writing to socket");
-         ws_handler->fd_alive = 0;
-         exit(1);
-    }
+		{
+			cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"ERROR writing to socket");
+			ws_handler->fd_alive = 0;
+			exit(1);
+		}
 
     bzero(buff,256);
     n = recv(ws_handler->fd,buff,255, 0);
     if (n < 0)
-    {
-         cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"ERROR reading from socket");
-         ws_handler->fd_alive = 0;
-         exit(1);
-    }
+		{
+			cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"ERROR reading from socket");
+			ws_handler->fd_alive = 0;
+			exit(1);
+		}
 
     ws_handler->buffer = realloc(NULL, strlen(buff));
     strcpy(ws_handler->buffer, buff);
-
-
 
     if(strncmp (ws_handler->buffer,"HTTP/1.1 101",12) != 0){
         cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"Unexpected Response. Expected HTTP/1.1 101..");
@@ -364,12 +377,12 @@ int cellophane_connect(WsHandler * ws_handler) {
         //m_payload_a--;
 
         /* const char** ptr = mpg123_decoders();
-        int count = 0;
-        while (*(ptr++) != NULL){ ++count; }
-            --ptr;
-        while (count-- > 0){
-        syslog(LOG_DEBUG, "\t%s",*(--ptr));
-        }*/
+		   int count = 0;
+		   while (*(ptr++) != NULL){ ++count; }
+		   --ptr;
+		   while (count-- > 0){
+		   syslog(LOG_DEBUG, "\t%s",*(--ptr));
+		   }*/
 
     }else{
 
@@ -402,79 +415,78 @@ int cellophane_connect(WsHandler * ws_handler) {
 
 char * cellophane_generateKey(int length) {
 
-        char * key;
-        int c = 0;
-        char * tmp = malloc(16);
-        unsigned char * digest = malloc(16);
-        char random_number[16];
-        strcpy(tmp, "");
+	char * key;
+	int c = 0;
+	char * tmp = malloc(16);
+	unsigned char * digest = malloc(16);
+	char random_number[16];
+	strcpy(tmp, "");
 
-        while( (c * 16) < length) {
-            tmp = realloc(tmp,(c+1)*16);
-            srand(time(NULL));
-            sprintf(random_number,"%d",rand());
-            cellophane_compute_md5((char *)random_number,digest);
-            strcat(tmp, (const char *)digest);
-            c++;
-        }
+	while( (c * 16) < length) {
+		tmp = realloc(tmp,(c+1)*16);
+		srand(time(NULL));
+		sprintf(random_number,"%d",rand());
+		cellophane_compute_md5((char *)random_number,digest);
+		strcat(tmp, (const char *)digest);
+		c++;
+	}
 
 
-        key = malloc(Base64encode_len(c*16));
-        Base64encode(key, tmp, c*16);
+	key = malloc(Base64encode_len(c*16));
+	Base64encode(key, tmp, c*16);
 
-        return key;
+	return key;
 
 }
 
 char ** cellophane_read(WsHandler * ws_handler, int * message_num) {
 
-        int n;
-        int totalread = 0;
-        char * m_payload;
-        char buff[256];
+	int n;
+	int totalread = 0;
+	char * m_payload;
+	char buff[256];
 
-
-        bzero(buff,256);
-        n = recv(ws_handler->fd,buff,1, 0);
-        if (n < 0)
+	bzero(buff,256);
+	n = recv(ws_handler->fd,buff,1, 0);
+	if (n < 0)
         {
-             cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"ERROR reading from socket");
-             exit(1);
+			cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"ERROR reading from socket");
+			exit(1);
         }
 
-        bzero(buff,256);
-        n = recv(ws_handler->fd,buff,255, 0);
-        if (n < 0)
+	bzero(buff,256);
+	n = recv(ws_handler->fd,buff,255, 0);
+	if (n < 0)
         {
-             cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"ERROR reading from socket");
-             exit(1);
+			cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"ERROR reading from socket");
+			exit(1);
         }
 
-        ws_handler->buffer = realloc(NULL, strlen(buff));
-        strcpy(ws_handler->buffer, buff);
+	ws_handler->buffer = realloc(NULL, strlen(buff));
+	strcpy(ws_handler->buffer, buff);
 
 
-        int num_messages = cellophane_number_of_message(buff,n);
+	int num_messages = cellophane_number_of_message(buff,n);
 
-        while(num_messages < 0){
-            //printf("\n\nNot enougth data..\n\n");
-            n = n + recv(ws_handler->fd,buff,255, 0);
-            if (n < 0)
+	while(num_messages < 0){
+		//printf("\n\nNot enougth data..\n\n");
+		n = n + recv(ws_handler->fd,buff,255, 0);
+		if (n < 0)
             {
-             cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"ERROR reading from socket");
-             break;
+				cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"ERROR reading from socket");
+				break;
             }
-            ws_handler->buffer = (char*)realloc(ws_handler->buffer,(strlen(ws_handler->buffer) + strlen(buff)));
-            strcat(ws_handler->buffer, buff);
-            num_messages = cellophane_number_of_message(ws_handler->buffer,n);
-        }
+		ws_handler->buffer = (char*)realloc(ws_handler->buffer,(strlen(ws_handler->buffer) + strlen(buff)));
+		strcat(ws_handler->buffer, buff);
+		num_messages = cellophane_number_of_message(ws_handler->buffer,n);
+	}
 
 
-        char ** stream_buffer = malloc(sizeof(char*) * num_messages);
+	char ** stream_buffer = malloc(sizeof(char*) * num_messages);
 
-        int msg_number = 0;
+	int msg_number = 0;
 
-        if (stream_buffer)
+	if (stream_buffer)
         {
 
             int buffer_pointer = 0;
@@ -485,17 +497,17 @@ char ** cellophane_read(WsHandler * ws_handler, int * message_num) {
                 int payload_len = (int)(ws_handler->buffer[buffer_pointer]);
                 buffer_pointer++;
                 switch (payload_len) {
-                    case 126:
-                        {
-                            char aux_len [2];
-                            strncpy(aux_len, ws_handler->buffer+buffer_pointer,2);
-                            payload_len = (((int)aux_len[0] & 0x00FF) << 8) | (aux_len[1]  & 0x00FF);
-                            buffer_pointer = buffer_pointer + 2;
-                            break;
-                        }
-                    case 127:
-                        //perror("Next 8 bytes are 64bit uint payload length, not yet implemented, since PHP can't handle 64bit longs!");
-                        break;
+				case 126:
+					{
+						char aux_len [2];
+						strncpy(aux_len, ws_handler->buffer+buffer_pointer,2);
+						payload_len = (((int)aux_len[0] & 0x00FF) << 8) | (aux_len[1]  & 0x00FF);
+						buffer_pointer = buffer_pointer + 2;
+						break;
+					}
+				case 127:
+					//perror("Next 8 bytes are 64bit uint payload length, not yet implemented, since PHP can't handle 64bit longs!");
+					break;
                 }
 
                 if((n-buffer_pointer)< payload_len){
@@ -523,69 +535,69 @@ char ** cellophane_read(WsHandler * ws_handler, int * message_num) {
         }
 
 
-        // There is also masking bit, as MSB, but it's 0 in current Socket.io
+	// There is also masking bit, as MSB, but it's 0 in current Socket.io
 
-        message_num = msg_number;
+	message_num = msg_number;
 
-        return stream_buffer;
+	return stream_buffer;
 }
 
 
- void cellophane_send(WsHandler * ws_handler, enum socket_io_type io_type, char * id, char * endpoint, char * message,  int easy) {
+void cellophane_send(WsHandler * ws_handler, enum socket_io_type io_type, char * id, char * endpoint, char * message,  int easy) {
 
-        Payload m_payload;
-        payload_init(&m_payload);
-        payload_setOpcode(&m_payload, OPCODE_TEXT);
+	Payload m_payload;
+	payload_init(&m_payload);
+	payload_setOpcode(&m_payload, OPCODE_TEXT);
 
-        char * raw_message;
-        if(io_type == TYPE_EVENT || io_type == TYPE_MESSAGE || io_type == TYPE_JSON_MESSAGE ){
-            if(!easy){
-                raw_message = malloc(4 + (int)(strlen(id)+strlen(endpoint)+strlen(message)));
-                bzero(raw_message, 4 + (int)(strlen(id)+strlen(endpoint)+strlen(message)));
-                sprintf(raw_message,"%d:%s:%s:%s", io_type, id, endpoint, message);
-            }else{
-                raw_message = malloc(4 + (int)strlen(message));
-                bzero(raw_message, 4 + (int)strlen(message));
-                sprintf(raw_message,"%d:::%s", io_type, message);
-            }
+	char * raw_message;
+	if(io_type == TYPE_EVENT || io_type == TYPE_MESSAGE || io_type == TYPE_JSON_MESSAGE ){
+		if(!easy){
+			raw_message = malloc(4 + (int)(strlen(id)+strlen(endpoint)+strlen(message)));
+			bzero(raw_message, 4 + (int)(strlen(id)+strlen(endpoint)+strlen(message)));
+			sprintf(raw_message,"%d:%s:%s:%s", io_type, id, endpoint, message);
+		}else{
+			raw_message = malloc(4 + (int)strlen(message));
+			bzero(raw_message, 4 + (int)strlen(message));
+			sprintf(raw_message,"%d:::%s", io_type, message);
+		}
 
-        }else{
-            if(!easy){
-                raw_message = malloc(3 + (int)(strlen(id)+strlen(endpoint)));
-                bzero(raw_message, 3 + (int)(strlen(id)+strlen(endpoint)));
-                sprintf(raw_message,"%d:%s:%s", io_type, id, endpoint);
-            }else{
-                raw_message = malloc(3);
-                bzero(raw_message, 3);
-                sprintf(raw_message,"%d::", io_type);
-            }
-        }
+	}else{
+		if(!easy){
+			raw_message = malloc(3 + (int)(strlen(id)+strlen(endpoint)));
+			bzero(raw_message, 3 + (int)(strlen(id)+strlen(endpoint)));
+			sprintf(raw_message,"%d:%s:%s", io_type, id, endpoint);
+		}else{
+			raw_message = malloc(3);
+			bzero(raw_message, 3);
+			sprintf(raw_message,"%d::", io_type);
+		}
+	}
 
-        payload_setPayload(&m_payload,(unsigned char *)raw_message);
-        payload_setMask(&m_payload, 0x1);
-        int bytes_towrite;
-        char * enc_payload = payload_encodePayload(&m_payload);
+	payload_setPayload(&m_payload,(unsigned char *)raw_message);
+	payload_setMask(&m_payload, 0x1);
+	int bytes_towrite;
+	char * enc_payload = payload_encodePayload(&m_payload);
 
 
-        int n = send(ws_handler->fd,enc_payload, m_payload.enc_payload_size, 0);
-        cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DETAILED,"Sending data line: sent %d should be sent %d",n, m_payload.enc_payload_size);
-        if (n < 0)
+	int n = send(ws_handler->fd,enc_payload, m_payload.enc_payload_size, 0);
+	cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DETAILED,"Sending data line: sent %d should be sent %d",n, m_payload.enc_payload_size);
+	if (n < 0)
         {
             cellophane_print_log(ws_handler,LOG_ERROR,DEBUG_NONE,"ERROR writing to socket");
             exit(1);
         }
 
-        cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DIAGNOSTIC,"Sent    > %s (%d)",raw_message, strlen(raw_message));
-        usleep(100*1000);
+	cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DIAGNOSTIC,"Sent    > %s (%d)",raw_message, strlen(raw_message));
+	usleep(100*1000);
 }
 
 void  cellophane_emit(WsHandler * ws_handler, char * event, char * args, char * endpoint){//, $callback = null) {
 
-        int malloc_len = (22 + (int)(strlen(event)+strlen(args))) * sizeof(char);
-        char * emit_message = (char*) malloc(malloc_len);
-        bzero(emit_message,malloc_len);
-        snprintf(emit_message, malloc_len,"{\"name\":\"%s\",\"args\":%s}", event, args);
-        cellophane_send(ws_handler,TYPE_EVENT, "", endpoint, emit_message, 1);
+	int malloc_len = (22 + (int)(strlen(event)+strlen(args))) * sizeof(char);
+	char * emit_message = (char*) malloc(malloc_len);
+	bzero(emit_message,malloc_len);
+	snprintf(emit_message, malloc_len,"{\"name\":\"%s\",\"args\":%s}", event, args);
+	cellophane_send(ws_handler,TYPE_EVENT, "", endpoint, emit_message, 1);
 }
 
 void cellophane_on(WsHandler * ws_handler, char * event_name, void (*on_event_callback)(WsEventInfo))
@@ -594,15 +606,15 @@ void cellophane_on(WsHandler * ws_handler, char * event_name, void (*on_event_ca
 
     for(i=0; i < 10; i++){
         if(strcmp(ws_handler->default_events[i].event_name,event_name) == 0){
-                ws_handler->default_events[i].callback_func = on_event_callback;
-                return;
+			ws_handler->default_events[i].callback_func = on_event_callback;
+			return;
         }
     }
 
     for(i=0; i < ws_handler->user_events_len; i++){
         if(strcmp(ws_handler->events[i].event_name,event_name) == 0){
-                ws_handler->events[i].callback_func = on_event_callback;
-                return;
+			ws_handler->events[i].callback_func = on_event_callback;
+			return;
         }
     }
     if (ws_handler->user_events_len == 100){
@@ -659,22 +671,22 @@ void cellophane_io_message_parse(char * raw_string, WsMessage * message){
 
 void cellophane_io_json_response_parse(char * json_string, WsEventInfo * info_rsponse){
 
-    json_object * jobj = json_tokener_parse(json_string);
+	/*    json_object * jobj = json_tokener_parse(json_string);
 
 
-    char *key; struct json_object *val;
-    struct lh_entry *entry;
+		  char *key; struct json_object *val;
+		  struct lh_entry *entry;
 
-    for(entry = json_object_get_object(jobj)->head; ({ if(entry) { key = (char*)entry->k; val = (struct json_object*)entry->v; } ; entry; }); entry = entry->next ){
+		  for(entry = json_object_get_object(jobj)->head; ({ if(entry) { key = (char*)entry->k; val = (struct json_object*)entry->v; } ; entry; }); entry = entry->next ){
 
-        if(strncmp(key,"name",4) == 0){
-            info_rsponse->event_name = json_object_get_string(val);
-        }
+		  if(strncmp(key,"name",4) == 0){
+		  info_rsponse->event_name = json_object_get_string(val);
+		  }
 
-       if(strncmp(key,"args",4) == 0){
-            info_rsponse->message = json_object_get_string(val);
-        }
-    }
+		  if(strncmp(key,"args",4) == 0){
+		  info_rsponse->message = json_object_get_string(val);
+		  }
+		  }*/
 
 }
 
@@ -684,66 +696,66 @@ void cellophane_event_handler(WsHandler * ws_handler){
     char ** data = cellophane_read(ws_handler, NULL);
     int i = 0;
     if (data)
-    {
+		{
 
-        for (i = 0; *(data + i); i++)
-        {
-            cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DIAGNOSTIC,"Received> %s",*(data + i));
-            WsMessage ws_message;
-            cellophane_io_message_parse(*(data + i), &ws_message);
+			for (i = 0; *(data + i); i++)
+				{
+					cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DIAGNOSTIC,"Received> %s",*(data + i));
+					WsMessage ws_message;
+					cellophane_io_message_parse(*(data + i), &ws_message);
 
-            if(ws_message.type == TYPE_EVENT || ws_message.type == TYPE_JSON_MESSAGE || ws_message.type == TYPE_MESSAGE){
+					if(ws_message.type == TYPE_EVENT || ws_message.type == TYPE_JSON_MESSAGE || ws_message.type == TYPE_MESSAGE){
 
-                WsEventInfo info_rsponse;
-                cellophane_io_json_response_parse(ws_message.raw_message, &info_rsponse);
-                cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DIAGNOSTIC,"Received data on message> data: %s , args: %s",info_rsponse.event_name, info_rsponse.message);
+						WsEventInfo info_rsponse;
+						cellophane_io_json_response_parse(ws_message.raw_message, &info_rsponse);
+						cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DIAGNOSTIC,"Received data on message> data: %s , args: %s",info_rsponse.event_name, info_rsponse.message);
 
-                cellophane_trigger_default_events(ws_handler, info_rsponse);
+						cellophane_trigger_default_events(ws_handler, info_rsponse);
 
-                int j;
-                for(j=0; j < ws_handler->user_events_len; j++){
-                    if(strcmp(ws_handler->events[j].event_name, info_rsponse.event_name) == 0){
-                            ws_handler->events[j].callback_func(info_rsponse);
-                    }
-                }
+						int j;
+						for(j=0; j < ws_handler->user_events_len; j++){
+							if(strcmp(ws_handler->events[j].event_name, info_rsponse.event_name) == 0){
+								ws_handler->events[j].callback_func(info_rsponse);
+							}
+						}
 
-            }else{
+					}else{
 
-            }
+					}
 
 
-        }
-        cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DIAGNOSTIC,"Received %d Messages",i);
+				}
+			cellophane_print_log(ws_handler,LOG_INFO,DEBUG_DIAGNOSTIC,"Received %d Messages",i);
 
-    }
+		}
 
     if(!i)
-    {
+		{
 
-        cellophane_print_log(ws_handler,LOG_WARNING,DEBUG_DETAILED,"No data received....");
+			cellophane_print_log(ws_handler,LOG_WARNING,DEBUG_DETAILED,"No data received....");
 
-        cellophane_reconect(ws_handler);
-        if(!ws_handler->fd_alive){
-            WsEventInfo info;
-            info.event_name = "reconnect_failed";
-            info.message = "Reconnect Failed";
-            cellophane_trigger_default_events(ws_handler, info);
-        }
+			cellophane_reconect(ws_handler);
+			if(!ws_handler->fd_alive){
+				WsEventInfo info;
+				info.event_name = "reconnect_failed";
+				info.message = "Reconnect Failed";
+				cellophane_trigger_default_events(ws_handler, info);
+			}
 
-    }
+		}
 
 }
 
 void  cellophane_close(WsHandler * ws_handler)
 {
-        cellophane_send(ws_handler, TYPE_DISCONNECT, "", "","", 1);
-        //printf("sending data line 489\n");
-        close(ws_handler->fd);
+	cellophane_send(ws_handler, TYPE_DISCONNECT, "", "","", 1);
+	//printf("sending data line 489\n");
+	close(ws_handler->fd);
 
-        WsEventInfo info;
-        info.event_name = "disconnect";
-        info.message = "Disconnecting";
-        cellophane_trigger_default_events(ws_handler, info);
+	WsEventInfo info;
+	info.event_name = "disconnect";
+	info.message = "Disconnecting";
+	cellophane_trigger_default_events(ws_handler, info);
 }
 
 
@@ -782,7 +794,7 @@ void cellophane_keepAlive(WsHandler * ws_handler) {
 
     while(ws_handler->fd_alive){
         if (spinner2_index==2){
-                spinner2_index=0;
+			spinner2_index=0;
         }
 
         cellophane_print_log(ws_handler,LOG_FREE,DEBUG_DETAILED,"%c\b", spinner2[spinner2_index]);
@@ -829,32 +841,32 @@ int cellophane_read_ready(WsHandler * ws_handler)
     FD_SET(ws_handler->fd, &readSetOfSockets);
 
     if(ws_handler->fd > fd_max)
-    {
-       fd_max = ws_handler->fd;
-    }
+		{
+			fd_max = ws_handler->fd;
+		}
 
     iSelectReturn = select(fd_max + 1, &readSetOfSockets, (fd_set*) 0, (fd_set*) 0, &timeToWait);
 
     // iSelectReturn -1: ERROR, 0: no data, >0: Number of descriptors found which pass test given to select()
     if ( iSelectReturn == 0 )  // Not ready to read. No valid descriptors
-    {
-        return 0;
-    }
+		{
+			return 0;
+		}
     else if ( iSelectReturn < 0 )  // Handle error
-    {
-        return 1;
-    }
+		{
+			return 1;
+		}
 
     // Got here because iSelectReturn > 0 thus data available on at least one descriptor
     // Is our socket in the return list of readable sockets
     if ( FD_ISSET(ws_handler->fd, &readSetOfSockets) )
-    {
-        return 1;
-    }
+		{
+			return 1;
+		}
     else
-    {
-        return 0;
-    }
+		{
+			return 0;
+		}
 
     return 0;
 }
@@ -874,7 +886,7 @@ char * cellophane_do_web_request(WsHandler * ws_handler)
     curl_easy_setopt(curl_handle, CURLOPT_URL, ws_handler->socketIOUrl );
     curl_easy_setopt(curl_handle, CURLOPT_FOLLOWLOCATION, 1);
 
-     if (!ws_handler->checkSslPeer){
+	if (!ws_handler->checkSslPeer){
         curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0);
         curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYHOST, 0);
     }
@@ -905,17 +917,17 @@ char * cellophane_do_web_request(WsHandler * ws_handler)
 
 /* the function to invoke as the data recieved */
 size_t static cellophane_write_callback_func(void *buffer,
-                        size_t size,
-                        size_t nmemb,
-                        void *userp)
+											 size_t size,
+											 size_t nmemb,
+											 void *userp)
 {
     struct block *response  =  (struct block *)userp;
 	char *temp;
 	char *buf = (char *)buffer;
-	size_t buf_size = size * nmemb, cnt = 0;
-
+	size_t buf_size = (size * nmemb) - 5, cnt = 0;
+	/*Magic number 5 is required to avoid gargabe at the start of the response, with this hack json is recieved*/
     response->mem = (char *) malloc( buf_size );
-	memcpy(response->mem, (buf+1), buf_size-1);
+	memcpy(response->mem, (buf+5), buf_size);
 	*(response->mem + buf_size) = '\0';
 }
 
@@ -931,14 +943,14 @@ char** cellophane_str_split(char* a_str, const char a_delim)
 
     /* Count how many elements will be extracted. */
     while (*tmp)
-    {
-        if (a_delim == *tmp)
-        {
-            count++;
-            last_comma = tmp;
-        }
-        tmp++;
-    }
+		{
+			if (a_delim == *tmp)
+				{
+					count++;
+					last_comma = tmp;
+				}
+			tmp++;
+		}
 
     /* Add space for trailing token. */
     count += last_comma < (a_str + strlen(a_str) - 1);
@@ -950,19 +962,19 @@ char** cellophane_str_split(char* a_str, const char a_delim)
     result = malloc(sizeof(char*) * count);
 
     if (result)
-    {
-        size_t idx  = 0;
-        char* token = strtok(a_str, delim);
+		{
+			size_t idx  = 0;
+			char* token = strtok(a_str, delim);
 
-        while (token)
-        {
-            assert(idx < count);
-            *(result + idx++) = strdup(token);
-            token = strtok(0, delim);
-        }
-        assert(idx == count - 1);
-        *(result + idx) = 0;
-    }
+			while (token)
+				{
+					assert(idx < count);
+					*(result + idx++) = strdup(token);
+					token = strtok(0, delim);
+				}
+			assert(idx == count - 1);
+			*(result + idx) = 0;
+		}
 
     return result;
 }
@@ -970,50 +982,50 @@ char** cellophane_str_split(char* a_str, const char a_delim)
 
 int cellophane_number_of_message(char * buffer, int n){
 
-        int msg_counter = 0;
-        int buffer_pointer = 0;
+	int msg_counter = 0;
+	int buffer_pointer = 0;
 
-        while(buffer_pointer < n){
+	while(buffer_pointer < n){
 
-            int payload_len = (int)(buffer[buffer_pointer]);
-            buffer_pointer++;
-            switch (payload_len) {
-                case 126:
-                    {
-                        char aux_len [2];
-                        strncpy(aux_len, buffer+buffer_pointer,2);
-                        payload_len = (((int)aux_len[0] & 0x00FF) << 8) | (aux_len[1]  & 0x00FF);
-                        buffer_pointer = buffer_pointer + 2;
-                        break;
-                    }
-                case 127:
-                    //perror("Next 8 bytes are 64bit uint payload length, not yet implemented, since PHP can't handle 64bit longs!");
-                    break;
-            }
+		int payload_len = (int)(buffer[buffer_pointer]);
+		buffer_pointer++;
+		switch (payload_len) {
+		case 126:
+			{
+				char aux_len [2];
+				strncpy(aux_len, buffer+buffer_pointer,2);
+				payload_len = (((int)aux_len[0] & 0x00FF) << 8) | (aux_len[1]  & 0x00FF);
+				buffer_pointer = buffer_pointer + 2;
+				break;
+			}
+		case 127:
+			//perror("Next 8 bytes are 64bit uint payload length, not yet implemented, since PHP can't handle 64bit longs!");
+			break;
+		}
 
-            if((n-buffer_pointer)< payload_len){
+		if((n-buffer_pointer)< payload_len){
 
-                return -1;
-            }
+			return -1;
+		}
 
-            buffer_pointer = buffer_pointer + payload_len +1;
-            msg_counter++;
-        }
-        return msg_counter;
+		buffer_pointer = buffer_pointer + payload_len +1;
+		msg_counter++;
+	}
+	return msg_counter;
 }
 
 int cellophane_find_on_char_array(char ** tokens , char * key){
 
     if (tokens)
-    {
-        int i;
-        for (i = 0; *(tokens + i); i++)
-        {
-            if(strcmp(*(tokens + i), key) == 0){
-                return 1;
-            }
-        }
-    }
+		{
+			int i;
+			for (i = 0; *(tokens + i); i++)
+				{
+					if(strcmp(*(tokens + i), key) == 0){
+						return 1;
+					}
+				}
+		}
 
     return 0;
 
@@ -1040,25 +1052,25 @@ int Base64encode(char *encoded, const char *string, int len)
 
     p = encoded;
     for (i = 0; i < len - 2; i += 3) {
-    *p++ = basis_64[(string[i] >> 2) & 0x3F];
-    *p++ = basis_64[((string[i] & 0x3) << 4) |
-                    ((int) (string[i + 1] & 0xF0) >> 4)];
-    *p++ = basis_64[((string[i + 1] & 0xF) << 2) |
-                    ((int) (string[i + 2] & 0xC0) >> 6)];
-    *p++ = basis_64[string[i + 2] & 0x3F];
+		*p++ = basis_64[(string[i] >> 2) & 0x3F];
+		*p++ = basis_64[((string[i] & 0x3) << 4) |
+						((int) (string[i + 1] & 0xF0) >> 4)];
+		*p++ = basis_64[((string[i + 1] & 0xF) << 2) |
+						((int) (string[i + 2] & 0xC0) >> 6)];
+		*p++ = basis_64[string[i + 2] & 0x3F];
     }
     if (i < len) {
-    *p++ = basis_64[(string[i] >> 2) & 0x3F];
-    if (i == (len - 1)) {
-        *p++ = basis_64[((string[i] & 0x3) << 4)];
-        *p++ = '=';
-    }
-    else {
-        *p++ = basis_64[((string[i] & 0x3) << 4) |
-                        ((int) (string[i + 1] & 0xF0) >> 4)];
-        *p++ = basis_64[((string[i + 1] & 0xF) << 2)];
-    }
-    *p++ = '=';
+		*p++ = basis_64[(string[i] >> 2) & 0x3F];
+		if (i == (len - 1)) {
+			*p++ = basis_64[((string[i] & 0x3) << 4)];
+			*p++ = '=';
+		}
+		else {
+			*p++ = basis_64[((string[i] & 0x3) << 4) |
+							((int) (string[i + 1] & 0xF0) >> 4)];
+			*p++ = basis_64[((string[i + 1] & 0xF) << 2)];
+		}
+		*p++ = '=';
     }
 
     *p++ = '\0';

@@ -1,6 +1,6 @@
 SHELL = /bin/sh
 CC    = gcc
-CFLAGS  =  -Wall -Iinclude -Isrc -lcurl -ljson-c -g
+CFLAGS  =   -Iinclude -Isrc -lcurl  -I/home/vagrant/usr/include -L/home/vagrant/usr/lib/ -ljansson
 
 TARGET  = cellophane
 SOURCES = $(shell echo src/*.c) 
