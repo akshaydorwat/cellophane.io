@@ -41,17 +41,26 @@ enum cellophane_log_type{
     LOG_FREE
 };
 
+enum eio_type{
+
+	EIO_OPEN    = 0,
+    EIO_CLOSE   = 1,
+    EIO_PING    = 2,
+    EIO_PONG    = 3,
+    EIO_MESSAGE = 4,
+    EIO_UPGRADE = 5,
+    EIO_NOOP    = 6
+};
+
 enum socket_io_type{
 
-    TYPE_DISCONNECT   = 0,
-    TYPE_CONNECT      = 1,
-    TYPE_HEARTBEAT    = 2,
-    TYPE_MESSAGE      = 3,
-    TYPE_JSON_MESSAGE = 4,
-    TYPE_EVENT        = 5,
-    TYPE_ACK          = 6,
-    TYPE_ERROR        = 7,
-    TYPE_NOOP         = 8,
+	TYPE_CONNECT      = 0,
+    TYPE_DISCONNECT   = 1,
+    TYPE_EVENT        = 2,    
+	TYPE_ACK          = 3,
+	TYPE_ERROR        = 4,
+	TYPE_BINARY_EVENT = 5,
+    TYPE_BINARY_ACK   = 6
 };
 
 typedef struct _wsmessage{
@@ -118,7 +127,7 @@ extern int cellophane_handshake(WsHandler * ws_handler);
 extern int cellophane_connect(WsHandler * ws_handler);
 extern char * cellophane_generateKey(int length);
 extern char ** cellophane_read(WsHandler * ws_handler, int * msg_number);
-extern void cellophane_send(WsHandler * ws_handler, enum socket_io_type io_type, char * id, char * endpoint, char * message, int easy);
+extern void cellophane_send(WsHandler * ws_handler, enum eio_type e_type, enum socket_io_type s_type, char * id, char * endpoint, char * message,  int easy);
 extern void  cellophane_emit(WsHandler * ws_handler, char * event, char * args, char * endpoint);
 extern void  cellophane_close(WsHandler * ws_handler);
 extern void cellophane_keepAlive(WsHandler * ws_handler);
