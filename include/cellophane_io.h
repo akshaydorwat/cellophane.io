@@ -64,7 +64,8 @@ enum socket_io_type{
 };
 
 typedef struct _wsmessage{
-    enum socket_io_type type;
+    enum socket_io_type s_type;
+	enum eio_type e_type;
     char * raw_message;
 
 }wsmessage_type;
@@ -121,8 +122,8 @@ typedef wshandler_type WsHandler;
 extern void cellophane_new(WsHandler * ws_handler, char * tcp_protocol , char * address, int port, char * path, int protocol, int read, int  checkSslPeer, enum cellophane_debug_level  debug);
 extern void cellophane_set_debug(WsHandler * ws_handler, enum cellophane_debug_level debug);
 extern void cellophane_io(WsHandler * ws_handler, char * tcp_protocol, char * address, int port );
-extern void cellophane_io_connect(WsHandler * ws_handler);
-extern void cellophane_init(WsHandler * ws_handler, int keepalive);
+extern int cellophane_io_connect(WsHandler * ws_handler);
+extern int cellophane_init(WsHandler * ws_handler, int keepalive);
 extern int cellophane_handshake(WsHandler * ws_handler);
 extern int cellophane_connect(WsHandler * ws_handler);
 extern char * cellophane_generateKey(int length);
